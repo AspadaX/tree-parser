@@ -522,8 +522,6 @@ fn create_code_construct_with_parent(
     }
 }
 
-
-
 /// Extract construct name from node
 fn extract_construct_name(node: Node, source: &str) -> Option<String> {
     // Try to find identifier child
