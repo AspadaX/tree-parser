@@ -5,7 +5,41 @@ use regex::Regex;
 use tree_sitter::{Query, QueryCursor};
 use streaming_iterator::StreamingIterator;
 
-/// Search for code constructs by node type
+/// Search for code constructs by their tree-sitter node type
+/// 
+/// This function searches through all code constructs in a parsed file
+/// and returns those that match the specified node type. Optionally,
+/// results can be filtered by a regex pattern applied to construct names.
+/// 
+/// # Arguments
+/// 
+/// * `parsed_file` - The parsed file to search within
+/// * `node_type` - The tree-sitter node type to search for (e.g., "function_definition")
+/// * `name_pattern` - Optional regex pattern to filter results by construct name
+/// 
+/// # Returns
+/// 
+/// A vector of `CodeConstruct` objects that match the search criteria.
+/// 
+/// # Examples
+/// 
+/// ```rust
+/// use tree_parser::{parse_file, search_by_node_type, Language};
+/// 
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let parsed = parse_file("example.py", Language::Python).await?;
+///     
+///     // Find all function definitions
+///     let functions = search_by_node_type(&parsed, "function_definition", None);
+///     
+///     // Find functions with names starting with "test_"
+///     let test_functions = search_by_node_type(&parsed, "function_definition", Some(r"^test_"));
+///     
+///     println!("Found {} functions, {} are tests", functions.len(), test_functions.len());
+///     Ok(())
+/// }
+/// ```
 pub fn search_by_node_type(
     parsed_file: &ParsedFile,
     node_type: &str,
@@ -46,6 +80,42 @@ pub fn search_by_node_type(
 }
 
 /// Search for code constructs matching any of the specified node types
+/// 
+/// This function extends `search_by_node_type` to search for multiple node types
+/// simultaneously. This is useful when looking for related constructs that may
+/// have different node types in different languages.
+/// 
+/// # Arguments
+/// 
+/// * `parsed_file` - The parsed file to search within
+/// * `node_types` - Array of tree-sitter node types to search for
+/// * `name_pattern` - Optional regex pattern to filter results by construct name
+/// 
+/// # Returns
+/// 
+/// A vector of `CodeConstruct` objects that match any of the specified node types
+/// and the optional name pattern.
+/// 
+/// # Examples
+/// 
+/// ```rust
+/// use tree_parser::{parse_file, search_by_multiple_node_types, Language};
+/// 
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let parsed = parse_file("example.js", Language::JavaScript).await?;
+///     
+///     // Find all function-like constructs
+///     let functions = search_by_multiple_node_types(
+///         &parsed,
+///         &["function_declaration", "function_expression", "arrow_function"],
+///         None
+///     );
+///     
+///     println!("Found {} function-like constructs", functions.len());
+///     Ok(())
+/// }
+/// ```
 pub fn search_by_multiple_node_types(
     parsed_file: &ParsedFile,
     node_types: &[&str],
@@ -85,7 +155,50 @@ pub fn search_by_multiple_node_types(
     results
 }
 
-/// Execute a custom tree-sitter query
+/// Execute a custom tree-sitter query for advanced searching
+/// 
+/// This function allows you to use tree-sitter's powerful query language
+/// to perform complex searches on the syntax tree. This provides the most
+/// flexibility for finding specific code patterns.
+/// 
+/// # Arguments
+/// 
+/// * `parsed_file` - The parsed file to search within
+/// * `tree_sitter_query` - A tree-sitter query string
+/// 
+/// # Returns
+/// 
+/// A `Result` containing a vector of `CodeConstruct` objects that match
+/// the query, or an `Error` if the query is invalid or execution fails.
+/// 
+/// # Examples
+/// 
+/// ```rust
+/// use tree_parser::{parse_file, search_by_query, Language};
+/// 
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let parsed = parse_file("example.py", Language::Python).await?;
+///     
+///     // Find all function definitions with decorators
+///     let query = r#"
+///         (decorated_definition
+///           (function_definition
+///             name: (identifier) @func_name))
+///     "#;
+///     
+///     let decorated_functions = search_by_query(&parsed, query)?;
+///     println!("Found {} decorated functions", decorated_functions.len());
+///     Ok(())
+/// }
+/// ```
+/// 
+/// # Errors
+/// 
+/// This function will return an error if:
+/// - The query syntax is invalid
+/// - The syntax tree is not available
+/// - File I/O operations fail
 pub fn search_by_query(
     parsed_file: &ParsedFile,
     tree_sitter_query: &str,
@@ -121,7 +234,50 @@ pub fn search_by_query(
     Ok(results)
 }
 
-/// Search for functions in a parsed file
+/// Search for function definitions in a parsed file
+/// 
+/// This is a convenience function that searches for function-like constructs
+/// across different programming languages. It automatically selects the
+/// appropriate node types based on the file's language.
+/// 
+/// # Arguments
+/// 
+/// * `parsed_file` - The parsed file to search within
+/// * `name_pattern` - Optional regex pattern to filter results by function name
+/// 
+/// # Returns
+/// 
+/// A vector of `CodeConstruct` objects representing functions, methods,
+/// or other callable constructs.
+/// 
+/// # Supported Languages
+/// 
+/// - **Python**: `function_definition`
+/// - **Rust**: `function_item`
+/// - **JavaScript/TypeScript**: `function_declaration`, `function_expression`, `arrow_function`
+/// - **Java**: `method_declaration`, `constructor_declaration`
+/// - **C/C++**: `function_definition`
+/// - **Go**: `function_declaration`, `method_declaration`
+/// 
+/// # Examples
+/// 
+/// ```rust
+/// use tree_parser::{parse_file, search_functions, Language};
+/// 
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let parsed = parse_file("example.rs", Language::Rust).await?;
+///     
+///     // Find all functions
+///     let all_functions = search_functions(&parsed, None);
+///     
+///     // Find functions starting with "test_"
+///     let test_functions = search_functions(&parsed, Some(r"^test_"));
+///     
+///     println!("Found {} functions, {} are tests", all_functions.len(), test_functions.len());
+///     Ok(())
+/// }
+/// ```
 pub fn search_functions(
     parsed_file: &ParsedFile,
     name_pattern: Option<&str>,
@@ -141,7 +297,52 @@ pub fn search_functions(
     search_by_multiple_node_types(parsed_file, &function_types, name_pattern)
 }
 
-/// Search for classes in a parsed file
+/// Search for class and type definitions in a parsed file
+/// 
+/// This is a convenience function that searches for class-like constructs
+/// across different programming languages. It automatically selects the
+/// appropriate node types based on the file's language.
+/// 
+/// # Arguments
+/// 
+/// * `parsed_file` - The parsed file to search within
+/// * `name_pattern` - Optional regex pattern to filter results by class/type name
+/// 
+/// # Returns
+/// 
+/// A vector of `CodeConstruct` objects representing classes, structs,
+/// interfaces, enums, or other type definitions.
+/// 
+/// # Supported Languages
+/// 
+/// - **Python**: `class_definition`
+/// - **Rust**: `struct_item`, `enum_item`
+/// - **JavaScript**: `class_declaration`
+/// - **TypeScript**: `class_declaration`, `interface_declaration`
+/// - **Java**: `class_declaration`, `interface_declaration`
+/// - **C**: `struct_specifier`, `union_specifier`, `enum_specifier`
+/// - **C++**: `class_specifier`, `struct_specifier`, `union_specifier`, `enum_specifier`
+/// - **Go**: `type_declaration`
+/// 
+/// # Examples
+/// 
+/// ```rust
+/// use tree_parser::{parse_file, search_classes, Language};
+/// 
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let parsed = parse_file("example.py", Language::Python).await?;
+///     
+///     // Find all class definitions
+///     let all_classes = search_classes(&parsed, None);
+///     
+///     // Find classes with names ending in "Error"
+///     let error_classes = search_classes(&parsed, Some(r"Error$"));
+///     
+///     println!("Found {} classes, {} are error types", all_classes.len(), error_classes.len());
+///     Ok(())
+/// }
+/// ```
 pub fn search_classes(
     parsed_file: &ParsedFile,
     name_pattern: Option<&str>,

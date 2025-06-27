@@ -11,7 +11,40 @@ use tokio::fs;
 use tree_sitter::{Node, Parser, Tree};
 use walkdir::WalkDir;
 
-/// Parse a single source code file
+/// Parse a single source code file and extract code constructs
+/// 
+/// This function reads a source code file, parses it using tree-sitter,
+/// and extracts all identifiable code constructs (functions, classes, etc.).
+/// 
+/// # Arguments
+/// 
+/// * `file_path` - Path to the source code file to parse
+/// * `language` - The programming language of the file
+/// 
+/// # Returns
+/// 
+/// Returns a `ParsedFile` containing all extracted constructs and metadata,
+/// or an `Error` if parsing fails.
+/// 
+/// # Examples
+/// 
+/// ```rust
+/// use tree_parser::{parse_file, Language};
+/// 
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let result = parse_file("src/main.rs", Language::Rust).await?;
+///     println!("Found {} constructs", result.constructs.len());
+///     Ok(())
+/// }
+/// ```
+/// 
+/// # Errors
+/// 
+/// This function will return an error if:
+/// - The file cannot be read (I/O error)
+/// - The file content cannot be parsed (syntax error)
+/// - The specified language is not supported
 pub async fn parse_file(file_path: &str, language: Language) -> Result<ParsedFile, Error> {
     let start_time = Instant::now();
     
@@ -59,7 +92,43 @@ pub async fn parse_file(file_path: &str, language: Language) -> Result<ParsedFil
     })
 }
 
-/// Parse an entire project directory
+/// Parse an entire project directory recursively
+/// 
+/// This function traverses a directory structure, identifies source code files,
+/// and parses them concurrently to extract code constructs from all supported files.
+/// 
+/// # Arguments
+/// 
+/// * `dir_path` - Path to the root directory to parse
+/// * `options` - Configuration options controlling parsing behavior
+/// 
+/// # Returns
+/// 
+/// Returns a `ParsedProject` containing results from all parsed files,
+/// including statistics and error information.
+/// 
+/// # Examples
+/// 
+/// ```rust
+/// use tree_parser::{parse_directory, ParseOptions};
+/// 
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let options = ParseOptions::default();
+///     let project = parse_directory("./src", options).await?;
+///     
+///     println!("Parsed {} files", project.total_files_processed);
+///     for (language, count) in &project.language_distribution {
+///         println!("{:?}: {} files", language, count);
+///     }
+///     Ok(())
+/// }
+/// ```
+/// 
+/// # Performance
+/// 
+/// This function uses concurrent processing to parse multiple files simultaneously.
+/// The concurrency level is controlled by `options.max_concurrent_files`.
 pub async fn parse_directory(
     dir_path: &str,
     options: ParseOptions,
@@ -97,6 +166,47 @@ pub async fn parse_directory(
 }
 
 /// Parse a project directory with custom file filtering
+/// 
+/// This function provides advanced filtering capabilities for selecting which files
+/// to parse within a directory structure. It combines the standard parsing options
+/// with custom filtering criteria.
+/// 
+/// # Arguments
+/// 
+/// * `dir_path` - Path to the root directory to parse
+/// * `file_filter` - Custom filter criteria for file selection
+/// * `options` - Configuration options controlling parsing behavior
+/// 
+/// # Returns
+/// 
+/// Returns a `ParsedProject` containing results from all files that match
+/// the filter criteria.
+/// 
+/// # Examples
+/// 
+/// ```rust
+/// use tree_parser::{parse_directory_with_filter, ParseOptions, FileFilter, Language};
+/// use std::sync::Arc;
+/// 
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let filter = FileFilter {
+///         languages: Some(vec![Language::Rust, Language::Python]),
+///         extensions: None,
+///         min_size_bytes: Some(100),
+///         max_size_bytes: Some(100_000),
+///         custom_predicate: Some(Arc::new(|path| {
+///             !path.to_string_lossy().contains("test")
+///         })),
+///     };
+///     
+///     let options = ParseOptions::default();
+///     let project = parse_directory_with_filter("./src", &filter, options).await?;
+///     
+///     println!("Parsed {} filtered files", project.total_files_processed);
+///     Ok(())
+/// }
+/// ```
 pub async fn parse_directory_with_filter(
     dir_path: &str,
     file_filter: &crate::FileFilter,
@@ -134,7 +244,20 @@ pub async fn parse_directory_with_filter(
     })
 }
 
-/// Collect files to parse from directory
+/// Collect files to parse from directory based on parsing options
+/// 
+/// This internal function traverses a directory structure and collects all files
+/// that should be parsed according to the provided options.
+/// 
+/// # Arguments
+/// 
+/// * `root_path` - Root directory path to start collection from
+/// * `options` - Parsing options that control file selection
+/// 
+/// # Returns
+/// 
+/// A vector of file paths that should be parsed, or an error if directory
+/// traversal fails.
 fn collect_files(root_path: &Path, options: &ParseOptions) -> Result<Vec<PathBuf>, Error> {
     let mut files = Vec::new();
     
@@ -180,7 +303,21 @@ fn collect_files(root_path: &Path, options: &ParseOptions) -> Result<Vec<PathBuf
     Ok(files)
 }
 
-/// Collect files with custom filter
+/// Collect files with custom filter criteria
+/// 
+/// This internal function extends the basic file collection with additional
+/// filtering capabilities provided by a `FileFilter`.
+/// 
+/// # Arguments
+/// 
+/// * `root_path` - Root directory path to start collection from
+/// * `options` - Parsing options that control file selection
+/// * `filter` - Custom filter criteria for more precise file selection
+/// 
+/// # Returns
+/// 
+/// A vector of file paths that match both the parsing options and the custom
+/// filter criteria.
 fn collect_files_with_filter(
     root_path: &Path,
     options: &ParseOptions,
