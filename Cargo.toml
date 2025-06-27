@@ -2,6 +2,8 @@
 name = "tree-parser"
 version = "0.1.0"
 edition = "2024"
+description = "An asynchronous Rust library for parsing source code and searching constructs."
+license = "MIT"
 
 [dependencies]
 tree-sitter = "0.25.6"
