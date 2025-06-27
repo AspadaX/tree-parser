@@ -57,7 +57,7 @@ pub fn search_by_node_type(
         None
     };
     
-    // Search through all constructs
+    // Search through all constructs (already flattened, no need for recursive search)
     for construct in &parsed_file.constructs {
         if construct.node_type == node_type {
             // Check name pattern if provided
@@ -71,9 +71,6 @@ pub fn search_by_node_type(
                 results.push(construct.clone());
             }
         }
-        
-        // Search recursively in children
-        search_in_children(construct, node_type, &regex, &mut results);
     }
     
     results
@@ -133,7 +130,7 @@ pub fn search_by_multiple_node_types(
         None
     };
     
-    // Search through all constructs
+    // Search through all constructs (already flattened, no need for recursive search)
     for construct in &parsed_file.constructs {
         if node_types.contains(&construct.node_type.as_str()) {
             // Check name pattern if provided
@@ -147,9 +144,6 @@ pub fn search_by_multiple_node_types(
                 results.push(construct.clone());
             }
         }
-        
-        // Search recursively in children
-        search_in_children_multiple(construct, node_types, &regex, &mut results);
     }
     
     results
@@ -399,57 +393,7 @@ pub fn search_variables(
     search_by_multiple_node_types(parsed_file, &variable_types, name_pattern)
 }
 
-/// Helper function to search recursively in children
-fn search_in_children(
-    construct: &CodeConstruct,
-    node_type: &str,
-    regex: &Option<Regex>,
-    results: &mut Vec<CodeConstruct>,
-) {
-    for child in &construct.children {
-        if child.node_type == node_type {
-            // Check name pattern if provided
-            if let Some(regex) = regex {
-                if let Some(name) = &child.name {
-                    if regex.is_match(name) {
-                        results.push(child.clone());
-                    }
-                }
-            } else {
-                results.push(child.clone());
-            }
-        }
-        
-        // Continue searching recursively
-        search_in_children(child, node_type, regex, results);
-    }
-}
 
-/// Helper function to search recursively in children for multiple node types
-fn search_in_children_multiple(
-    construct: &CodeConstruct,
-    node_types: &[&str],
-    regex: &Option<Regex>,
-    results: &mut Vec<CodeConstruct>,
-) {
-    for child in &construct.children {
-        if node_types.contains(&child.node_type.as_str()) {
-            // Check name pattern if provided
-            if let Some(regex) = regex {
-                if let Some(name) = &child.name {
-                    if regex.is_match(name) {
-                        results.push(child.clone());
-                    }
-                }
-            } else {
-                results.push(child.clone());
-            }
-        }
-        
-        // Continue searching recursively
-        search_in_children_multiple(child, node_types, regex, results);
-    }
-}
 
 /// Create a CodeConstruct from a tree-sitter node (used in query search)
 fn create_code_construct_from_node(
@@ -502,4 +446,61 @@ fn extract_node_name(node: tree_sitter::Node, source: &str) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{parse_file, Language};
+    use std::fs;
+    use tokio;
+
+    #[tokio::test]
+    async fn test_no_duplicate_results() {
+        // Create a test Python file with nested functions
+        let test_content = r#"
+class CacheEngine:
+    def __init__(self):
+        pass
+    
+    def _allocate_kv_cache(self):
+        return "cache allocated"
+
+    class InnerClass:
+        def _allocate_kv_cache(self):
+            return "inner cache"
+"#;
+        
+        // Write test file
+        let test_file = "test_cache_duplication.py";
+        fs::write(test_file, test_content).expect("Failed to write test file");
+        
+        // Parse the file
+        let parsed = parse_file(test_file, Language::Python).await.expect("Failed to parse file");
+        
+        // Search for function definitions with specific name
+        let functions = search_by_node_type(&parsed, "function_definition", Some("_allocate_kv_cache"));
+        
+        // Should find exactly 2 functions (one in CacheEngine, one in InnerClass)
+        // Before the fix, this would return 4 (each function counted twice due to duplication)
+        assert_eq!(functions.len(), 2, "Expected exactly 2 functions, but found {}", functions.len());
+        
+        // Verify the functions have different parents
+        let mut parent_names = Vec::new();
+        for func in &functions {
+            if let Some(parent) = &func.parent {
+                if let Some(parent_name) = &parent.name {
+                    parent_names.push(parent_name.clone());
+                }
+            }
+        }
+        
+        // Should have 2 different parent classes
+        parent_names.sort();
+        parent_names.dedup();
+        assert_eq!(parent_names.len(), 2, "Expected 2 different parent classes");
+        
+        // Clean up
+        fs::remove_file(test_file).ok();
+    }
 }
