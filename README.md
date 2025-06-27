@@ -6,6 +6,32 @@
 
 A comprehensive Rust library for parsing and searching code elements across multiple programming languages using tree-sitter. This library provides powerful tools for static code analysis, code search, and AST manipulation.
 
+## Installation
+
+Use `cargo add tree-parser` to install the latest version.
+
+Enable feature flags for desired languages:
+
+```toml
+# Enable specific language support
+tree-parser = { version = "0.1.0", features = ["python", "rust_lang", "javascript"] }
+
+# Or enable all languages
+tree-parser = { version = "0.1.0", features = ["full"] }
+```
+
+### Available Feature Flags
+
+- `python` - Python language support
+- `rust_lang` - Rust language support  
+- `javascript` - JavaScript language support
+- `typescript` - TypeScript language support
+- `java` - Java language support
+- `c` - C language support
+- `cpp` - C++ language support
+- `go` - Go language support
+- `full` - Enable all language parsers
+
 ## Features
 
 - 🚀 **Multi-language Support**: Parse Python, Rust, JavaScript, TypeScript, Java, C, C++, Go, and more
@@ -15,21 +41,6 @@ A comprehensive Rust library for parsing and searching code elements across mult
 - 📊 **Rich Metadata**: Extract detailed information about code constructs
 - 🛡️ **Type Safety**: Full Rust type safety with comprehensive error handling
 - 🔧 **Configurable**: Extensive configuration options for different use cases
-
-## Quick Start
-
-Add this to your `Cargo.toml`:
-
-```toml
-[dependencies]
-tree-parser = "0.1.0"
-
-# Enable specific language features
-tree-parser = { version = "0.1.0", features = ["python", "rust_lang", "javascript"] }
-
-# Or enable all languages
-tree-parser = { version = "0.1.0", features = ["full"] }
-```
 
 ## Basic Usage
 
@@ -65,9 +76,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let options = ParseOptions::default();
     let project = parse_directory("./src", options).await?;
     
-    println!("Processed {} files in {}ms", 
-        project.total_files_processed, 
-        project.processing_time_ms);
+    println!("Processed {} files", 
+        project.total_files_processed);
     
     // Print language distribution
     for (language, count) in &project.language_distribution {
@@ -140,7 +150,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ..Default::default()
     };
     
-    let project = parse_directory_with_filter("./src", filter, options).await?;
+    let project = parse_directory_with_filter("./src", &filter, options).await?;
     println!("Filtered parsing complete!");
     
     Ok(())
@@ -163,7 +173,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             body: (block) @class_body)
     "#;
     
-    let matches = search_by_query(&parsed_file, query, Language::Python)?;
+    let matches = search_by_query(&parsed_file, query)?;
     
     for m in matches {
         println!("Found class: {}", m.source_code);
@@ -225,6 +235,10 @@ async fn main() {
 }
 ```
 
+## Documentation
+
+- **[Rust Docs](https://docs.rs/tree-parser)** - Generated API documentation
+
 ## Performance
 
 The library is designed for high performance:
@@ -233,6 +247,14 @@ The library is designed for high performance:
 - **Memory Efficient**: Streaming processing for large codebases
 - **Optimized Parsing**: Tree-sitter's incremental parsing capabilities
 - **Configurable Limits**: Prevent resource exhaustion with configurable limits
+
+### Performance Tips
+
+- Use `FileFilter` to reduce processing overhead
+- Adjust `max_concurrent_files` based on available memory
+- Set appropriate `max_file_size_mb` to prevent memory issues
+- Enable caching for repeated operations
+- Use `LanguageDetection::ByExtension` for best performance
 
 ## Contributing
 

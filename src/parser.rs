@@ -6,7 +6,7 @@ use crate::{
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+
 use tokio::fs;
 use tree_sitter::{Node, Parser, Tree};
 use walkdir::WalkDir;
@@ -46,8 +46,6 @@ use walkdir::WalkDir;
 /// - The file content cannot be parsed (syntax error)
 /// - The specified language is not supported
 pub async fn parse_file(file_path: &str, language: Language) -> Result<ParsedFile, Error> {
-    let start_time = Instant::now();
-    
     // Read file content
     let content = fs::read_to_string(file_path)
         .await
@@ -72,8 +70,6 @@ pub async fn parse_file(file_path: &str, language: Language) -> Result<ParsedFil
     // Extract code constructs
     let constructs = extract_constructs(&tree, &content, &language);
     
-    let parse_time_ms = start_time.elapsed().as_millis() as u64;
-    
     let path = Path::new(file_path);
     let relative_path = path
         .file_name()
@@ -88,7 +84,7 @@ pub async fn parse_file(file_path: &str, language: Language) -> Result<ParsedFil
         constructs,
         syntax_tree: Some(tree),
         file_size_bytes,
-        parse_time_ms,
+
     })
 }
 
@@ -133,7 +129,6 @@ pub async fn parse_directory(
     dir_path: &str,
     options: ParseOptions,
 ) -> Result<ParsedProject, Error> {
-    let start_time = Instant::now();
     let root_path = PathBuf::from(dir_path);
     
     if !root_path.exists() {
@@ -148,8 +143,6 @@ pub async fn parse_directory(
     
     // Calculate statistics
     let total_files_processed = parsed_files.len();
-    let processing_time_ms = start_time.elapsed().as_millis() as u64;
-    
     let mut language_distribution = HashMap::new();
     for file in &parsed_files {
         *language_distribution.entry(file.language.clone()).or_insert(0) += 1;
@@ -159,7 +152,7 @@ pub async fn parse_directory(
         root_path: dir_path.to_string(),
         files: parsed_files,
         total_files_processed,
-        processing_time_ms,
+
         language_distribution,
         error_files,
     })
@@ -212,7 +205,6 @@ pub async fn parse_directory_with_filter(
     file_filter: &crate::FileFilter,
     options: ParseOptions,
 ) -> Result<ParsedProject, Error> {
-    let start_time = Instant::now();
     let root_path = PathBuf::from(dir_path);
     
     if !root_path.exists() {
@@ -227,8 +219,6 @@ pub async fn parse_directory_with_filter(
     
     // Calculate statistics
     let total_files_processed = parsed_files.len();
-    let processing_time_ms = start_time.elapsed().as_millis() as u64;
-    
     let mut language_distribution = HashMap::new();
     for file in &parsed_files {
         *language_distribution.entry(file.language.clone()).or_insert(0) += 1;
@@ -238,7 +228,7 @@ pub async fn parse_directory_with_filter(
         root_path: dir_path.to_string(),
         files: parsed_files,
         total_files_processed,
-        processing_time_ms,
+
         language_distribution,
         error_files,
     })

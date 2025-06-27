@@ -16,12 +16,12 @@
 //! ## Quick Start
 //!
 //! ```rust
-//! use tree_parser::{parse_file, ParseOptions, Language};
+//! use tree_parser::{parse_file, Language};
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     // Parse a single file
-//!     let parsed_file = parse_file("src/main.rs", ParseOptions::default()).await?;
+//!     let parsed_file = parse_file("src/main.rs", Language::Rust).await?;
 //!     
 //!     println!("Found {} constructs", parsed_file.constructs.len());
 //!     for construct in &parsed_file.constructs {
@@ -36,14 +36,171 @@
 //! }
 //! ```
 //!
-//! ## Examples
+//! ## Finding Code Constructs
 //!
-//! See the `examples/` directory for comprehensive usage examples including:
-//! - Basic parsing and directory traversal
-//! - Advanced search with regex patterns
-//! - Custom file filtering
-//! - Performance optimization
-//! - Error handling strategies
+//! This library provides several powerful methods to search for specific code constructs:
+//!
+//! ### 1. Search by Node Type
+//!
+//! ```rust
+//! use tree_parser::{parse_file, search_by_node_type, Language};
+//!
+//! #[tokio::main]
+//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let parsed_file = parse_file("example.py", Language::Python).await?;
+//!     
+//!     // Find all function definitions
+//!     let functions = search_by_node_type(&parsed_file, "function_definition", None);
+//!     
+//!     // Find test functions using regex
+//!     let test_functions = search_by_node_type(&parsed_file, "function_definition", Some(r"^test_.*"));
+//!     
+//!     println!("Found {} functions, {} are tests", functions.len(), test_functions.len());
+//!     Ok(())
+//! }
+//! ```
+//!
+//! ### 2. Search by Multiple Node Types
+//!
+//! ```rust
+//! use tree_parser::{parse_file, search_by_multiple_node_types, Language};
+//!
+//! #[tokio::main]
+//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let parsed_file = parse_file("example.js", Language::JavaScript).await?;
+//!     
+//!     // Find all function-like constructs
+//!     let functions = search_by_multiple_node_types(
+//!         &parsed_file,
+//!         &["function_declaration", "function_expression", "arrow_function"],
+//!         None
+//!     );
+//!     
+//!     println!("Found {} function-like constructs", functions.len());
+//!     Ok(())
+//! }
+//! ```
+//!
+//! ### 3. Advanced Search with Tree-sitter Queries
+//!
+//! ```rust
+//! use tree_parser::{parse_file, search_by_query, Language};
+//!
+//! #[tokio::main]
+//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let parsed_file = parse_file("example.py", Language::Python).await?;
+//!     
+//!     // Find all class definitions with their methods
+//!     let query = r#"
+//!         (class_definition
+//!           name: (identifier) @class_name
+//!           body: (block
+//!             (function_definition
+//!               name: (identifier) @method_name)))
+//!     "#;
+//!     
+//!     let classes_with_methods = search_by_query(&parsed_file, query)?;
+//!     println!("Found {} classes with methods", classes_with_methods.len());
+//!     Ok(())
+//! }
+//! ```
+//!
+//! ## Finding Node Types
+//!
+//! To effectively search for code constructs, you need to know the correct node types.
+//! Here are the most common node types by language:
+//!
+//! ### Python
+//! - `function_definition` - Function definitions
+//! - `class_definition` - Class definitions  
+//! - `import_statement` - Import statements
+//! - `decorated_definition` - Functions/classes with decorators
+//! - `assignment` - Variable assignments
+//!
+//! ### Rust
+//! - `function_item` - Function definitions
+//! - `struct_item` - Struct definitions
+//! - `impl_item` - Implementation blocks
+//! - `trait_item` - Trait definitions
+//! - `enum_item` - Enum definitions
+//! - `mod_item` - Module definitions
+//!
+//! ### JavaScript/TypeScript
+//! - `function_declaration` - Function declarations
+//! - `function_expression` - Function expressions
+//! - `arrow_function` - Arrow functions
+//! - `method_definition` - Class methods
+//! - `class_declaration` - Class declarations
+//!
+//! ### Java
+//! - `method_declaration` - Method definitions
+//! - `class_declaration` - Class declarations
+//! - `interface_declaration` - Interface declarations
+//! - `constructor_declaration` - Constructor definitions
+//!
+//! For a complete list of node types, inspect your parsed files or consult the
+//! tree-sitter grammar documentation for your target language.
+//!
+//! ### Discovering Node Types
+//!
+//! ```rust
+//! use tree_parser::{parse_file, Language};
+//! use std::collections::HashSet;
+//!
+//! #[tokio::main]
+//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let parsed_file = parse_file("your_file.py", Language::Python).await?;
+//!     
+//!     // Collect all unique node types
+//!     let mut node_types: HashSet<String> = HashSet::new();
+//!     for construct in &parsed_file.constructs {
+//!         node_types.insert(construct.node_type.clone());
+//!     }
+//!     
+//!     println!("Available node types:");
+//!     for node_type in &node_types {
+//!         println!("  - {}", node_type);
+//!     }
+//!     
+//!     Ok(())
+//! }
+//! ```
+//!
+//! ### 4. Online Tree-sitter Playground
+//!
+//! Use the [Tree-sitter Playground](https://tree-sitter.github.io/tree-sitter/playground) to:
+//! 1. Paste your code
+//! 2. Select the appropriate language
+//! 3. Explore the generated syntax tree
+//! 4. Identify the exact node types you need
+//!
+//! ## Best Practices
+//!
+//! ### Performance Optimization
+//! - Increase `max_concurrent_files` for better performance on multi-core systems
+//! - Use file filters to exclude unnecessary files (node_modules, target, .git, etc.)
+//! - Set appropriate `max_file_size_mb` limits to skip very large files
+//! - Enable caching with `enable_caching: true` for repeated operations
+//! - Use `LanguageDetection::ByExtension` for faster processing
+//!
+//! ### Memory Management
+//! - Set `syntax_tree: None` after extracting constructs if you don't need the tree
+//! - Process files in batches rather than loading entire projects
+//! - Use streaming approaches for very large codebases
+//!
+//! ### Error Handling
+//! - Always check `project.error_files` for individual file parsing errors
+//! - Handle different `ErrorType` variants appropriately
+//! - Use proper error propagation with `?` operator
+//!
+//! ## Troubleshooting
+//!
+//! **Common Issues:**
+//! - "Unsupported language" error: Enable correct feature flags in Cargo.toml
+//! - "Parse error" for valid code: Check for syntax errors or unsupported language features
+//! - Poor performance: Increase concurrency, use filters, enable caching
+//! - Memory issues: Drop syntax trees after use, process in batches
+//! - Missing constructs: Verify node type names, check nesting, use tree-sitter queries
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -223,7 +380,6 @@ pub struct ParsedFile {
     #[serde(skip)]
     pub syntax_tree: Option<Tree>,
     pub file_size_bytes: usize,
-    pub parse_time_ms: u64,
 }
 
 /// Represents the results of parsing an entire project or directory
@@ -235,7 +391,6 @@ pub struct ParsedProject {
     pub root_path: String,
     pub files: Vec<ParsedFile>,
     pub total_files_processed: usize,
-    pub processing_time_ms: u64,
     pub language_distribution: HashMap<Language, usize>,
     pub error_files: Vec<FileError>,
 }
