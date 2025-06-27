@@ -1,0 +1,415 @@
+//! Core parsing functionality
+
+use crate::{
+    languages::*, CodeConstruct, ConstructMetadata, Error, ErrorType, FileError, Language,
+    LanguageDetection, ParseOptions, ParsedFile, ParsedProject,
+};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::time::Instant;
+use tokio::fs;
+use tree_sitter::{Node, Parser, Tree};
+use walkdir::WalkDir;
+
+/// Parse a single source code file
+pub async fn parse_file(file_path: &str, language: Language) -> Result<ParsedFile, Error> {
+    let start_time = Instant::now();
+    
+    // Read file content
+    let content = fs::read_to_string(file_path)
+        .await
+        .map_err(|e| Error::Io(e.to_string()))?;
+    
+    let file_size_bytes = content.len();
+    
+    // Get tree-sitter language
+    let ts_language = get_tree_sitter_language(&language)?;
+    
+    // Create parser
+    let mut parser = Parser::new();
+    parser
+        .set_language(&ts_language)
+        .map_err(|e| Error::Parse(e.to_string()))?;
+    
+    // Parse the content
+    let tree = parser
+        .parse(&content, None)
+        .ok_or_else(|| Error::Parse("Failed to parse file".to_string()))?;
+    
+    // Extract code constructs
+    let constructs = extract_constructs(&tree, &content, &language);
+    
+    let parse_time_ms = start_time.elapsed().as_millis() as u64;
+    
+    let path = Path::new(file_path);
+    let relative_path = path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    
+    Ok(ParsedFile {
+        file_path: file_path.to_string(),
+        relative_path,
+        language,
+        constructs,
+        syntax_tree: Some(tree),
+        file_size_bytes,
+        parse_time_ms,
+    })
+}
+
+/// Parse an entire project directory
+pub async fn parse_directory(
+    dir_path: &str,
+    options: ParseOptions,
+) -> Result<ParsedProject, Error> {
+    let start_time = Instant::now();
+    let root_path = PathBuf::from(dir_path);
+    
+    if !root_path.exists() {
+        return Err(Error::Io(format!("Directory does not exist: {}", dir_path)));
+    }
+    
+    // Collect files to parse
+    let files_to_parse = collect_files(&root_path, &options)?;
+    
+    // Parse files in parallel
+    let (parsed_files, error_files) = parse_files_parallel(files_to_parse, &options).await;
+    
+    // Calculate statistics
+    let total_files_processed = parsed_files.len();
+    let processing_time_ms = start_time.elapsed().as_millis() as u64;
+    
+    let mut language_distribution = HashMap::new();
+    for file in &parsed_files {
+        *language_distribution.entry(file.language.clone()).or_insert(0) += 1;
+    }
+    
+    Ok(ParsedProject {
+        root_path: dir_path.to_string(),
+        files: parsed_files,
+        total_files_processed,
+        processing_time_ms,
+        language_distribution,
+        error_files,
+    })
+}
+
+/// Parse a project directory with custom file filtering
+pub async fn parse_directory_with_filter(
+    dir_path: &str,
+    file_filter: &crate::FileFilter,
+    options: ParseOptions,
+) -> Result<ParsedProject, Error> {
+    let start_time = Instant::now();
+    let root_path = PathBuf::from(dir_path);
+    
+    if !root_path.exists() {
+        return Err(Error::Io(format!("Directory does not exist: {}", dir_path)));
+    }
+    
+    // Collect files to parse with custom filter
+    let files_to_parse = collect_files_with_filter(&root_path, &options, file_filter)?;
+    
+    // Parse files in parallel
+    let (parsed_files, error_files) = parse_files_parallel(files_to_parse, &options).await;
+    
+    // Calculate statistics
+    let total_files_processed = parsed_files.len();
+    let processing_time_ms = start_time.elapsed().as_millis() as u64;
+    
+    let mut language_distribution = HashMap::new();
+    for file in &parsed_files {
+        *language_distribution.entry(file.language.clone()).or_insert(0) += 1;
+    }
+    
+    Ok(ParsedProject {
+        root_path: dir_path.to_string(),
+        files: parsed_files,
+        total_files_processed,
+        processing_time_ms,
+        language_distribution,
+        error_files,
+    })
+}
+
+/// Collect files to parse from directory
+fn collect_files(root_path: &Path, options: &ParseOptions) -> Result<Vec<PathBuf>, Error> {
+    let mut files = Vec::new();
+    
+    let walker = if options.recursive {
+        WalkDir::new(root_path)
+    } else {
+        WalkDir::new(root_path).max_depth(1)
+    };
+    
+    for entry in walker {
+        let entry = entry.map_err(|e| Error::Io(e.to_string()))?;
+        let path = entry.path();
+        
+        // Skip directories
+        if path.is_dir() {
+            continue;
+        }
+        
+        // Skip hidden files if not included
+        if !options.include_hidden_files && is_hidden_file(path) {
+            continue;
+        }
+        
+        // Check ignore patterns
+        if should_ignore_file(path, &options.ignore_patterns) {
+            continue;
+        }
+        
+        // Check file size
+        if let Ok(metadata) = path.metadata() {
+            let size_mb = metadata.len() as usize / (1024 * 1024);
+            if size_mb > options.max_file_size_mb {
+                continue;
+            }
+        }
+        
+        // Check if we can detect the language
+        if detect_language_by_extension(&path.to_string_lossy()).is_some() {
+            files.push(path.to_path_buf());
+        }
+    }
+    
+    Ok(files)
+}
+
+/// Collect files with custom filter
+fn collect_files_with_filter(
+    root_path: &Path,
+    options: &ParseOptions,
+    filter: &crate::FileFilter,
+) -> Result<Vec<PathBuf>, Error> {
+    let mut files = collect_files(root_path, options)?;
+    
+    // Apply custom filter
+    files.retain(|path| {
+        // Check extensions
+        if let Some(ref extensions) = filter.extensions {
+            if let Some(ext) = path.extension() {
+                if !extensions.contains(&ext.to_string_lossy().to_lowercase()) {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        }
+        
+        // Check languages
+        if let Some(ref languages) = filter.languages {
+            if let Some(detected_lang) = detect_language_by_extension(&path.to_string_lossy()) {
+                if !languages.contains(&detected_lang) {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        }
+        
+        // Check file size
+        if let Ok(metadata) = path.metadata() {
+            let size = metadata.len() as usize;
+            
+            if let Some(min_size) = filter.min_size_bytes {
+                if size < min_size {
+                    return false;
+                }
+            }
+            
+            if let Some(max_size) = filter.max_size_bytes {
+                if size > max_size {
+                    return false;
+                }
+            }
+        }
+        
+        // Apply custom predicate
+        if let Some(ref predicate) = filter.custom_predicate {
+            if !predicate(path) {
+                return false;
+            }
+        }
+        
+        true
+    });
+    
+    Ok(files)
+}
+
+/// Parse files in parallel
+async fn parse_files_parallel(
+    files: Vec<PathBuf>,
+    options: &ParseOptions,
+) -> (Vec<ParsedFile>, Vec<FileError>) {
+    let chunk_size = std::cmp::max(1, files.len() / options.max_concurrent_files);
+    let mut parsed_files = Vec::new();
+    let mut error_files = Vec::new();
+    
+    for chunk in files.chunks(chunk_size) {
+        let chunk_results: Vec<_> = chunk
+            .iter()
+            .map(|path| async move {
+                let path_str = path.to_string_lossy().to_string();
+                
+                // Detect language
+                let language = match options.language_detection {
+                    LanguageDetection::ByExtension => detect_language_by_extension(&path_str),
+                    LanguageDetection::Combined => {
+                        // Try to read content for better detection
+                        if let Ok(content) = tokio::fs::read_to_string(path).await {
+                            detect_language(&path_str, Some(&content))
+                        } else {
+                            detect_language_by_extension(&path_str)
+                        }
+                    }
+                    _ => detect_language_by_extension(&path_str), // Fallback
+                };
+                
+                if let Some(lang) = language {
+                    match parse_file(&path_str, lang).await {
+                        Ok(parsed) => Ok(parsed),
+                        Err(e) => Err(FileError {
+                            file_path: path_str,
+                            error_type: ErrorType::ParseError,
+                            message: e.to_string(),
+                        }),
+                    }
+                } else {
+                    Err(FileError {
+                        file_path: path_str,
+                        error_type: ErrorType::UnsupportedLanguage,
+                        message: "Could not detect language".to_string(),
+                    })
+                }
+            })
+            .collect();
+        
+        // Await all tasks in this chunk
+        for result in futures::future::join_all(chunk_results).await {
+            match result {
+                Ok(parsed_file) => parsed_files.push(parsed_file),
+                Err(error) => error_files.push(error),
+            }
+        }
+    }
+    
+    (parsed_files, error_files)
+}
+
+/// Extract code constructs from syntax tree
+fn extract_constructs(tree: &Tree, source: &str, language: &Language) -> Vec<CodeConstruct> {
+    let mut constructs = Vec::new();
+    let root_node = tree.root_node();
+    
+    extract_constructs_recursive(root_node, source, language, &mut constructs, None);
+    
+    constructs
+}
+
+/// Recursively extract constructs from nodes
+fn extract_constructs_recursive(
+    node: Node,
+    source: &str,
+    language: &Language,
+    constructs: &mut Vec<CodeConstruct>,
+    parent: Option<&CodeConstruct>,
+) {
+    let node_type = node.kind();
+    let supported_types = get_supported_node_types(language);
+    
+    if supported_types.contains(&node_type.to_string()) {
+        let construct = create_code_construct(node, source, language);
+        constructs.push(construct);
+    }
+    
+    // Recursively process children
+    for i in 0..node.child_count() {
+        if let Some(child) = node.child(i) {
+            extract_constructs_recursive(child, source, language, constructs, parent);
+        }
+    }
+}
+
+/// Create a CodeConstruct from a tree-sitter node
+fn create_code_construct(node: Node, source: &str, language: &Language) -> CodeConstruct {
+    let start_byte = node.start_byte();
+    let end_byte = node.end_byte();
+    let source_code = source[start_byte..end_byte].to_string();
+    
+    let start_point = node.start_position();
+    let end_point = node.end_position();
+    
+    // Extract name if possible
+    let name = extract_construct_name(node, source);
+    
+    // Create metadata
+    let metadata = extract_metadata(node, source, language);
+    
+    CodeConstruct {
+        node_type: node.kind().to_string(),
+        name,
+        source_code,
+        start_line: start_point.row + 1, // Convert to 1-based
+        end_line: end_point.row + 1,
+        start_byte,
+        end_byte,
+        parent: None, // Will be set later if needed
+        children: Vec::new(), // Will be populated later if needed
+        metadata,
+    }
+}
+
+/// Extract construct name from node
+fn extract_construct_name(node: Node, source: &str) -> Option<String> {
+    // Try to find identifier child
+    for i in 0..node.child_count() {
+        if let Some(child) = node.child(i) {
+            if child.kind() == "identifier" || child.kind() == "name" {
+                let start = child.start_byte();
+                let end = child.end_byte();
+                return Some(source[start..end].to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Extract metadata from node
+fn extract_metadata(_node: Node, _source: &str, _language: &Language) -> ConstructMetadata {
+    ConstructMetadata {
+        visibility: None,
+        modifiers: Vec::new(),
+        parameters: Vec::new(),
+        return_type: None,
+        inheritance: Vec::new(),
+        annotations: Vec::new(),
+        documentation: None,
+    }
+}
+
+/// Check if file is hidden
+fn is_hidden_file(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name.starts_with('.'))
+        .unwrap_or(false)
+}
+
+/// Check if file should be ignored based on patterns
+fn should_ignore_file(path: &Path, ignore_patterns: &[String]) -> bool {
+    let path_str = path.to_string_lossy();
+    
+    for pattern in ignore_patterns {
+        if path_str.contains(pattern) {
+            return true;
+        }
+    }
+    
+    false
+}

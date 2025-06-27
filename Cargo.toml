@@ -5,3 +5,42 @@ edition = "2024"
 
 [dependencies]
 tree-sitter = "0.25.6"
+tokio = { version = "1.45.1", features = ["full"] }
+regex = "1.11.1"
+serde = { version = "1.0.219", features = ["derive"] }
+thiserror = "2.0.12"
+num_cpus = "1.17.0"
+walkdir = "2.5.0"
+futures = "0.3.31"
+
+# Language parsers (optional features)
+tree-sitter-python = { version = "0.23.6", optional = true }
+tree-sitter-rust = { version = "0.24.0", optional = true }
+tree-sitter-javascript = { version = "0.23.1", optional = true }
+tree-sitter-typescript = { version = "0.23.2", optional = true }
+tree-sitter-java = { version = "0.23.5", optional = true }
+tree-sitter-c = { version = "0.24.1", optional = true }
+tree-sitter-cpp = { version = "0.23.4", optional = true }
+tree-sitter-go = { version = "0.23.4", optional = true }
+streaming-iterator = "0.1.9"
+
+[features]
+default = ["python", "rust_lang", "javascript", "typescript"]
+python = ["tree-sitter-python"]
+rust_lang = ["tree-sitter-rust"]
+javascript = ["tree-sitter-javascript"]
+typescript = ["tree-sitter-typescript"]
+java = ["tree-sitter-java"]
+c = ["tree-sitter-c"]
+cpp = ["tree-sitter-cpp"]
+go = ["tree-sitter-go"]
+full = [
+    "python",
+    "rust_lang", 
+    "javascript",
+    "typescript",
+    "java",
+    "c",
+    "cpp",
+    "go"
+]

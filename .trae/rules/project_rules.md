@@ -1,0 +1,3 @@
+- Use `cargo add` to add dependencies. 
+- Re-check if codes can be re-used. If so, make them reusable by putting them into a function, struct or a module, or a trait. 
+- Make each supported langauge a feature. Add a `full` feature that supports all language. 
