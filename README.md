@@ -234,16 +234,6 @@ The library is designed for high performance:
 - **Optimized Parsing**: Tree-sitter's incremental parsing capabilities
 - **Configurable Limits**: Prevent resource exhaustion with configurable limits
 
-## Examples
-
-See the [`examples/`](examples/) directory for more comprehensive examples:
-
-- [`basic_parsing.rs`](examples/basic_parsing.rs) - Basic file and directory parsing
-- [`advanced_search.rs`](examples/advanced_search.rs) - Advanced search patterns
-- [`custom_filters.rs`](examples/custom_filters.rs) - Custom file filtering
-- [`performance_demo.rs`](examples/performance_demo.rs) - Performance optimization techniques
-- [`error_handling.rs`](examples/error_handling.rs) - Comprehensive error handling
-
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request. For major changes, please open an issue first to discuss what you would like to change.
