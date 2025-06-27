@@ -152,7 +152,6 @@ pub async fn parse_directory(
         root_path: dir_path.to_string(),
         files: parsed_files,
         total_files_processed,
-
         language_distribution,
         error_files,
     })
@@ -431,40 +430,68 @@ async fn parse_files_parallel(
 
 /// Extract code constructs from syntax tree
 fn extract_constructs(tree: &Tree, source: &str, language: &Language) -> Vec<CodeConstruct> {
-    let mut constructs = Vec::new();
     let root_node = tree.root_node();
+    let mut root_constructs = Vec::new();
     
-    extract_constructs_recursive(root_node, source, language, &mut constructs, None);
+    // Extract constructs with proper parent-child relationships
+    extract_constructs_hierarchical(root_node, source, language, &mut root_constructs, None);
     
-    constructs
+    // Flatten the hierarchy for the final result while preserving relationships
+    let mut all_constructs = Vec::new();
+    flatten_constructs(&root_constructs, &mut all_constructs);
+    
+    all_constructs
 }
 
-/// Recursively extract constructs from nodes
-fn extract_constructs_recursive(
+/// Recursively extract constructs from nodes with proper hierarchy
+fn extract_constructs_hierarchical(
     node: Node,
     source: &str,
     language: &Language,
     constructs: &mut Vec<CodeConstruct>,
-    parent: Option<&CodeConstruct>,
+    parent_construct: Option<&CodeConstruct>,
 ) {
     let node_type = node.kind();
     let supported_types = get_supported_node_types(language);
     
     if supported_types.contains(&node_type.to_string()) {
-        let construct = create_code_construct(node, source, language);
+        let mut construct = create_code_construct_with_parent(node, source, language, parent_construct);
+        
+        // Recursively process children and add them to this construct
+        let mut child_constructs = Vec::new();
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i) {
+                extract_constructs_hierarchical(child, source, language, &mut child_constructs, Some(&construct));
+            }
+        }
+        
+        construct.children = child_constructs;
         constructs.push(construct);
-    }
-    
-    // Recursively process children
-    for i in 0..node.child_count() {
-        if let Some(child) = node.child(i) {
-            extract_constructs_recursive(child, source, language, constructs, parent);
+    } else {
+        // If this node is not a supported construct, continue searching in its children
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i) {
+                extract_constructs_hierarchical(child, source, language, constructs, parent_construct);
+            }
         }
     }
 }
 
-/// Create a CodeConstruct from a tree-sitter node
-fn create_code_construct(node: Node, source: &str, language: &Language) -> CodeConstruct {
+/// Flatten hierarchical constructs into a single vector while preserving relationships
+fn flatten_constructs(constructs: &[CodeConstruct], flattened: &mut Vec<CodeConstruct>) {
+    for construct in constructs {
+        flattened.push(construct.clone());
+        flatten_constructs(&construct.children, flattened);
+    }
+}
+
+/// Create a CodeConstruct from a tree-sitter node with proper parent relationship
+fn create_code_construct_with_parent(
+    node: Node, 
+    source: &str, 
+    language: &Language,
+    parent_construct: Option<&CodeConstruct>
+) -> CodeConstruct {
     let start_byte = node.start_byte();
     let end_byte = node.end_byte();
     let source_code = source[start_byte..end_byte].to_string();
@@ -478,6 +505,9 @@ fn create_code_construct(node: Node, source: &str, language: &Language) -> CodeC
     // Create metadata
     let metadata = extract_metadata(node, source, language);
     
+    // Set parent if provided
+    let parent = parent_construct.map(|p| Box::new(p.clone()));
+    
     CodeConstruct {
         node_type: node.kind().to_string(),
         name,
@@ -486,11 +516,13 @@ fn create_code_construct(node: Node, source: &str, language: &Language) -> CodeC
         end_line: end_point.row + 1,
         start_byte,
         end_byte,
-        parent: None, // Will be set later if needed
-        children: Vec::new(), // Will be populated later if needed
+        parent,
+        children: Vec::new(), // Will be populated by the caller
         metadata,
     }
 }
+
+
 
 /// Extract construct name from node
 fn extract_construct_name(node: Node, source: &str) -> Option<String> {
@@ -505,6 +537,49 @@ fn extract_construct_name(node: Node, source: &str) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Language;
+
+    #[test]
+    fn test_parent_child_relationships() {
+        // Simple Python code with nested structure
+        let source = "class TestClass:\n    def test_method(self):\n        pass";
+        
+        // Create a simple tree-sitter parser for testing
+        let mut parser = Parser::new();
+        let language = crate::languages::get_tree_sitter_language(&Language::Python).unwrap();
+        parser.set_language(&language).unwrap();
+        
+        let tree = parser.parse(source, None).unwrap();
+        let constructs = extract_constructs(&tree, source, &Language::Python);
+        
+        // Find class and method constructs
+        let class_construct = constructs.iter().find(|c| c.node_type == "class_definition");
+        let method_construct = constructs.iter().find(|c| c.node_type == "function_definition");
+        
+        assert!(class_construct.is_some(), "Should find class construct");
+        assert!(method_construct.is_some(), "Should find method construct");
+        
+        let method = method_construct.unwrap();
+        
+        // Check that method has a parent
+        assert!(method.parent.is_some(), "Method should have a parent");
+        
+        if let Some(parent) = &method.parent {
+            assert_eq!(parent.node_type, "class_definition", "Method's parent should be the class");
+        }
+        
+        // Check that class has children
+        let class = class_construct.unwrap();
+        assert!(!class.children.is_empty(), "Class should have children");
+        
+        let child_method = class.children.iter().find(|c| c.node_type == "function_definition");
+        assert!(child_method.is_some(), "Class should contain the method as a child");
+    }
 }
 
 /// Extract metadata from node
