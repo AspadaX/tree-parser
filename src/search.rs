@@ -1,6 +1,7 @@
 //! Search functionality for finding code constructs
 
 use crate::{languages::get_tree_sitter_language, CodeConstruct, Error, Language, ParsedFile};
+use compact_str::{CompactString, ToCompactString};
 use regex::Regex;
 use tree_sitter::{Query, QueryCursor};
 use streaming_iterator::StreamingIterator;
@@ -45,7 +46,7 @@ pub fn search_by_node_type(
     node_type: &str,
     name_pattern: Option<&str>,
 ) -> Vec<CodeConstruct> {
-    let mut results = Vec::new();
+    let mut results: Vec<CodeConstruct> = Vec::new();
     
     // Compile regex pattern if provided
     let regex = if let Some(pattern) = name_pattern {
@@ -132,7 +133,7 @@ pub fn search_by_multiple_node_types(
     
     // Search through all constructs (already flattened, no need for recursive search)
     for construct in &parsed_file.constructs {
-        if node_types.contains(&construct.node_type.as_str()) {
+        if node_types.contains(&construct.node_type.as_ref()) {
             // Check name pattern if provided
             if let Some(ref regex) = regex {
                 if let Some(ref name) = construct.name {
@@ -234,20 +235,20 @@ fn create_code_construct_from_node(
     source: &str,
     _language: &Language,
 ) -> CodeConstruct {
-    let start_byte = node.start_byte();
-    let end_byte = node.end_byte();
-    let source_code = source[start_byte..end_byte].to_string();
+    let start_byte: usize = node.start_byte();
+    let end_byte: usize = node.end_byte();
+    let source_code: String = source[start_byte..end_byte].to_string();
     
-    let start_point = node.start_position();
-    let end_point = node.end_position();
+    let start_point: tree_sitter::Point = node.start_position();
+    let end_point: tree_sitter::Point = node.end_position();
     
     // Extract name if possible
-    let name = extract_node_name(node, source);
+    let name: Option<CompactString> = extract_node_name(node, source);
     
     CodeConstruct {
-        node_type: node.kind().to_string(),
+        node_type: node.kind().into(),
         name,
-        source_code,
+        source_code: source_code.to_compact_string(),
         start_line: start_point.row + 1, // Convert to 1-based
         end_line: end_point.row + 1,
         start_byte,
@@ -267,14 +268,14 @@ fn create_code_construct_from_node(
 }
 
 /// Extract name from a tree-sitter node
-fn extract_node_name(node: tree_sitter::Node, source: &str) -> Option<String> {
+fn extract_node_name(node: tree_sitter::Node, source: &str) -> Option<CompactString> {
     // Try to find identifier child
     for i in 0..node.child_count() {
         if let Some(child) = node.child(i) {
             if child.kind() == "identifier" || child.kind() == "name" {
                 let start = child.start_byte();
                 let end = child.end_byte();
-                return Some(source[start..end].to_string());
+                return Some(source[start..end].to_string().to_compact_string());
             }
         }
     }
@@ -309,7 +310,7 @@ class CacheEngine:
         fs::write(test_file, test_content).expect("Failed to write test file");
         
         // Parse the file
-        let parsed = parse_file(test_file, Language::Python).await.expect("Failed to parse file");
+        let parsed = parse_file(test_file, Language::Python, false).await.expect("Failed to parse file");
         
         // Search for function definitions with specific name
         let functions = search_by_node_type(&parsed, "function_definition", Some("_allocate_kv_cache"));

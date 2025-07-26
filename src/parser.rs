@@ -6,8 +6,12 @@ use crate::{
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
+use compact_str::{CompactString, ToCompactString};
+use memory_stats::memory_stats;
 use tokio::fs;
+use tokio::sync::Mutex;
 use tree_sitter::{Node, Parser, Tree};
 use walkdir::WalkDir;
 
@@ -45,46 +49,53 @@ use walkdir::WalkDir;
 /// - The file cannot be read (I/O error)
 /// - The file content cannot be parsed (syntax error)
 /// - The specified language is not supported
-pub async fn parse_file(file_path: &str, language: Language) -> Result<ParsedFile, Error> {
+pub async fn parse_file(parser: &mut Parser, file_path: &str, language: Language, include_syntax_tree: bool) -> Result<ParsedFile, Error> {
     // Read file content
-    let content = fs::read_to_string(file_path)
+    let content: String = fs::read_to_string(file_path)
         .await
         .map_err(|e| Error::Io(e.to_string()))?;
     
-    let file_size_bytes = content.len();
+    let file_size_bytes: usize = content.len();
     
     // Get tree-sitter language
-    let ts_language = get_tree_sitter_language(&language)?;
-    
-    // Create parser
-    let mut parser = Parser::new();
-    parser
-        .set_language(&ts_language)
-        .map_err(|e| Error::Parse(e.to_string()))?;
+    let ts_language: tree_sitter::Language = get_tree_sitter_language(&language)?;
     
     // Parse the content
-    let tree = parser
+    let tree: Tree = parser
         .parse(&content, None)
         .ok_or_else(|| Error::Parse("Failed to parse file".to_string()))?;
     
     // Extract code constructs
-    let constructs = extract_constructs(&tree, &content, &language);
+    let constructs: Vec<CodeConstruct> = extract_constructs(&tree, &content, &language);
     
-    let path = Path::new(file_path);
-    let relative_path = path
+    let path: &Path = Path::new(file_path);
+    let relative_path: String = path
         .file_name()
         .unwrap_or_default()
         .to_string_lossy()
         .to_string();
     
+    dbg!(memory_stats().unwrap());
+    
+    if include_syntax_tree {
+        return Ok(ParsedFile {
+            file_path: file_path.to_compact_string(),
+            relative_path: relative_path.to_compact_string(),
+            language,
+            constructs,
+            syntax_tree: Some(tree),
+            file_size_bytes,
+    
+        });
+    }
+    
     Ok(ParsedFile {
-        file_path: file_path.to_string(),
-        relative_path,
+        file_path: file_path.to_compact_string(),
+        relative_path: relative_path.to_compact_string(),
         language,
         constructs,
-        syntax_tree: Some(tree),
+        syntax_tree: None,
         file_size_bytes,
-
     })
 }
 
@@ -136,10 +147,12 @@ pub async fn parse_directory(
     }
     
     // Collect files to parse
-    let files_to_parse = collect_files(&root_path, &options)?;
+    let files_to_parse: Vec<PathBuf> = collect_files(&root_path, &options)?;
     
     // Parse files in parallel
-    let (parsed_files, error_files) = parse_files_parallel(files_to_parse, &options).await;
+    let (parsed_files, error_files): (Vec<ParsedFile>, Vec<FileError>) = parse_files_parallel(
+        files_to_parse, &options
+    ).await;
     
     // Calculate statistics
     let total_files_processed = parsed_files.len();
@@ -373,22 +386,26 @@ async fn parse_files_parallel(
     files: Vec<PathBuf>,
     options: &ParseOptions,
 ) -> (Vec<ParsedFile>, Vec<FileError>) {
-    let chunk_size = std::cmp::max(1, files.len() / options.max_concurrent_files);
-    let mut parsed_files = Vec::new();
-    let mut error_files = Vec::new();
+    let chunk_size: usize = std::cmp::max(1, files.len() / options.max_concurrent_files);
+    let mut parsed_files: Vec<ParsedFile> = Vec::new();
+    let mut error_files: Vec<FileError> = Vec::new();
+    
+    let parsers: Arc<Mutex<Vec<Parser>>> = Arc::new(Mutex::new(Vec::new()));
     
     for chunk in files.chunks(chunk_size) {
-        let chunk_results: Vec<_> = chunk
-            .iter()
-            .map(|path| async move {
-                let path_str = path.to_string_lossy().to_string();
+        let mut chunk_results = Vec::new();
+        
+        for subchunk in chunk {
+            let parsers = parsers.clone();
+            chunk_results.push(async move {
+                let path_str: String = subchunk.as_path().to_string_lossy().to_string();
                 
                 // Detect language
-                let language = match options.language_detection {
+                let language: Option<Language> = match options.language_detection {
                     LanguageDetection::ByExtension => detect_language_by_extension(&path_str),
                     LanguageDetection::Combined => {
                         // Try to read content for better detection
-                        if let Ok(content) = tokio::fs::read_to_string(path).await {
+                        if let Ok(content) = tokio::fs::read_to_string(subchunk.as_path()).await {
                             detect_language(&path_str, Some(&content))
                         } else {
                             detect_language_by_extension(&path_str)
@@ -398,7 +415,17 @@ async fn parse_files_parallel(
                 };
                 
                 if let Some(lang) = language {
-                    match parse_file(&path_str, lang).await {
+                    let mut parsers: tokio::sync::MutexGuard<'_, Vec<Parser>> = parsers.lock().await;
+                    let mut parser = match get_parser(&mut parsers, &lang) {
+                        Ok(parser) => parser,
+                        Err(_) => return Err(FileError {
+                            file_path: path_str,
+                            error_type: ErrorType::ParseError,
+                            message: "Failed to get a suitable parser".to_string(),
+                        }),
+                    };
+                    
+                    match parse_file(&mut parser, &path_str, lang, options.include_syntax_tree).await {
                         Ok(parsed) => Ok(parsed),
                         Err(e) => Err(FileError {
                             file_path: path_str,
@@ -414,7 +441,7 @@ async fn parse_files_parallel(
                     })
                 }
             })
-            .collect();
+        }
         
         // Await all tasks in this chunk
         for result in futures::future::join_all(chunk_results).await {
@@ -426,6 +453,28 @@ async fn parse_files_parallel(
     }
     
     (parsed_files, error_files)
+}
+
+fn get_parser<'a, 'b>(parsers: &'a mut Vec<Parser>, lang: &'b Language) -> Result<&'a mut Parser, Box<dyn std::error::Error>> {
+    let ts_language: tree_sitter::Language = get_tree_sitter_language(lang)?;
+    
+    // Pre-initialize necessary parsers
+    for (index, parser) in parsers.iter().enumerate() {
+        // Only when we do not have a parser for the detected language,
+        // we initialize a new parser
+        if let Some(parser_language) = parser.language() {
+            if ts_language.name() == parser_language.name() {
+                return Ok(&mut parsers[index]);
+            }
+        } 
+    }
+    
+    // Create parser
+    let mut parser: Parser = Parser::new();
+    parser.set_language(&ts_language)?;
+    parsers.push(parser);
+    
+    Ok(parsers.last_mut().unwrap())
 }
 
 /// Extract code constructs from syntax tree
@@ -500,18 +549,18 @@ fn create_code_construct_with_parent(
     let end_point = node.end_position();
     
     // Extract name if possible
-    let name = extract_construct_name(node, source);
+    let name: Option<CompactString> = extract_construct_name(node, source);
     
     // Create metadata
-    let metadata = extract_metadata(node, source, language);
+    let metadata: ConstructMetadata = extract_metadata(node, source, language);
     
     // Set parent if provided
-    let parent = parent_construct.map(|p| Box::new(p.clone()));
+    let parent: Option<Box<CodeConstruct>> = parent_construct.map(|p| Box::new(p.clone()));
     
     CodeConstruct {
-        node_type: node.kind().to_string(),
+        node_type: node.kind().to_compact_string(),
         name,
-        source_code,
+        source_code: source_code.to_compact_string(),
         start_line: start_point.row + 1, // Convert to 1-based
         end_line: end_point.row + 1,
         start_byte,
@@ -523,14 +572,14 @@ fn create_code_construct_with_parent(
 }
 
 /// Extract construct name from node
-fn extract_construct_name(node: Node, source: &str) -> Option<String> {
+fn extract_construct_name(node: Node, source: &str) -> Option<CompactString> {
     // Try to find identifier child
     for i in 0..node.child_count() {
         if let Some(child) = node.child(i) {
             if child.kind() == "identifier" || child.kind() == "name" {
                 let start = child.start_byte();
                 let end = child.end_byte();
-                return Some(source[start..end].to_string());
+                return Some(source[start..end].to_string().to_compact_string());
             }
         }
     }

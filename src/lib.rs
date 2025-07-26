@@ -206,6 +206,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
+use compact_str::CompactString;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tree_sitter::Tree;
@@ -355,9 +356,9 @@ pub struct ConstructMetadata {
 /// and hierarchical relationships with other constructs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CodeConstruct {
-    pub node_type: String,
-    pub name: Option<String>,
-    pub source_code: String,
+    pub node_type: CompactString,
+    pub name: Option<CompactString>,
+    pub source_code: CompactString,
     pub start_line: usize,
     pub end_line: usize,
     pub start_byte: usize,
@@ -373,8 +374,8 @@ pub struct CodeConstruct {
 /// including the parsed constructs, metadata, and performance metrics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParsedFile {
-    pub file_path: String,
-    pub relative_path: String,
+    pub file_path: CompactString,
+    pub relative_path: CompactString,
     pub language: Language,
     pub constructs: Vec<CodeConstruct>,
     #[serde(skip)]
@@ -469,6 +470,9 @@ pub struct FileFilter {
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParseOptions {
+    /// Whether to include the syntax tree while parsing,
+    /// required for query search
+    pub include_syntax_tree: bool,
     /// Maximum number of files to parse concurrently (default: 2 * CPU cores)
     pub max_concurrent_files: usize,
     /// Whether to include hidden files (files starting with '.') in parsing
@@ -490,6 +494,7 @@ pub struct ParseOptions {
 impl Default for ParseOptions {
     fn default() -> Self {
         Self {
+            include_syntax_tree: false,
             max_concurrent_files: num_cpus::get() * 2,
             include_hidden_files: false,
             max_file_size_mb: 10,

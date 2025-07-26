@@ -6,6 +6,7 @@ description = "An asynchronous Rust library for parsing source code and searchin
 license = "MIT"
 
 [dependencies]
+memory-stats = "1.2.0"
 tree-sitter = "0.25.6"
 tokio = { version = "1.45.1", features = ["full"] }
 regex = "1.11.1"
@@ -25,6 +26,7 @@ tree-sitter-c = { version = "0.24.1", optional = true }
 tree-sitter-cpp = { version = "0.23.4", optional = true }
 tree-sitter-go = { version = "0.23.4", optional = true }
 streaming-iterator = "0.1.9"
+compact_str = { version = "0.9.0", features = ["serde"] }
 
 [features]
 default = ["python", "rust_lang", "javascript", "typescript"]
